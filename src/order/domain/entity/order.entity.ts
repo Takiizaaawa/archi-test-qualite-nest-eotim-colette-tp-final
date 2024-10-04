@@ -85,33 +85,15 @@ export class Order {
   @Column({ nullable: true })
   @Expose({ groups: ['group_orders'] })
   private cancelReason: string | null;
-
-  // methode factory : permet de ne pas utiliser le constructor
-  // car le constructor est utilisé par typeorm
-  // public createOrder(createOrderCommand: CreateOrderCommand): Order {
-  //   this.verifyOrderCommandIsValid(createOrderCommand);
-  //   this.verifyMaxItemIsValid(createOrderCommand);
-
-  //   this.orderItems = createOrderCommand.items.map(
-  //     (item) => new OrderItem(item),
-  //   );
-
-  //   this.customerName = createOrderCommand.customerName;
-  //   this.shippingAddress = createOrderCommand.shippingAddress;
-  //   this.invoiceAddress = createOrderCommand.invoiceAddress;
-  //   this.status = OrderStatus.PENDING;
-  //   this.price = this.calculateOrderAmount(createOrderCommand.items);
-
-  //   return this;
-  // }
-
-  public constructor(createOrderCommand?: CreateOrderCommand) {
-    if (!createOrderCommand) {
+  
+  public constructor(createOrderCommand?: CreateOrderCommand, products?: Product[]) {
+    if (!createOrderCommand || !products) {
       return;
     }
 
     this.verifyOrderCommandIsValid(createOrderCommand);
     this.verifyMaxItemIsValid(createOrderCommand);
+    this.verifyProductsAreValid(createOrderCommand.items, products); // Nouvelle validation des produits
 
     this.orderItems = createOrderCommand.items.map(
       (item) => new OrderItem(item),
@@ -122,26 +104,33 @@ export class Order {
     this.invoiceAddress = createOrderCommand.invoiceAddress;
     this.status = OrderStatus.PENDING;
     this.price = this.calculateOrderAmount(createOrderCommand.items);
+
+    this.updateProductStock(createOrderCommand.items, products); // Mise à jour des stocks des produits
   }
 
-  private verifyMaxItemIsValid(createOrderCommand: CreateOrderCommand) {
-    if (createOrderCommand.items.length > Order.MAX_ITEMS) {
-      throw new BadRequestException(
-        'Cannot create order with more than 5 items',
-      );
-    }
+  private verifyProductsAreValid(items: ItemDetailCommand[], products: Product[]) {
+    // Vérifier que tous les produits dans la commande sont actifs et disponibles
+    items.forEach((item) => {
+      const product = products.find((p) => p.id === item.productId);
+      if (!product || !product.isActive) {
+        throw new BadRequestException(`Le produit ${item.productId} n'est pas valide ou est inactif`);
+      }
+    });
   }
 
-  private verifyOrderCommandIsValid(createOrderCommand: CreateOrderCommand) {
-    if (
-      !createOrderCommand.customerName ||
-      !createOrderCommand.items ||
-      createOrderCommand.items.length === 0 ||
-      !createOrderCommand.shippingAddress ||
-      !createOrderCommand.invoiceAddress
-    ) {
-      throw new BadRequestException('Missing required fields');
-    }
+  private updateProductStock(items: ItemDetailCommand[], products: Product[]) {
+    // Réduire le stock des produits commandés
+    items.forEach((item) => {
+      const product = products.find((p) => p.id === item.productId);
+      if (product) {
+        if (product.stock < item.quantity) {
+          throw new BadRequestException(
+            `Stock insuffisant pour le produit ${product.name}`,
+          );
+        }
+        product.stock -= item.quantity;
+      }
+    });
   }
 
   private calculateOrderAmount(items: ItemDetailCommand[]): number {

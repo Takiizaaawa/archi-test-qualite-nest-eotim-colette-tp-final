@@ -1,9 +1,9 @@
-import { Order } from '../entity/order.entity';
+import { Order } from './order.entity';
+import { Product } from './product.entity'; // Importation de Product
 import { Column, Entity, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
 
 export interface ItemDetailCommand {
-  productName: string;
-  price: number;
+  productId: string; // Utilisation de l'ID du produit
   quantity: number;
 }
 
@@ -14,8 +14,8 @@ export class OrderItem {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column()
-  productName: string;
+  @ManyToOne(() => Product, { eager: true }) // Relation avec Product
+  product: Product;
 
   @Column({
     type: 'int',
@@ -30,18 +30,25 @@ export class OrderItem {
   @ManyToOne(() => Order, (order) => order.orderItems)
   order: Order;
 
-  constructor(itemCommand: ItemDetailCommand) {
-    if (!itemCommand) {
+  constructor(itemCommand: ItemDetailCommand, product: Product) {
+    if (!itemCommand || !product) {
       return;
     }
+
     if (itemCommand.quantity > OrderItem.MAX_QUANTITY) {
       throw new Error(
-        'Quantity of items cannot exceed ' + OrderItem.MAX_QUANTITY,
+        `La quantité d'articles ne peut pas dépasser ${OrderItem.MAX_QUANTITY}`,
       );
     }
 
-    this.productName = itemCommand.productName;
+    if (itemCommand.quantity > product.stock) {
+      throw new Error(
+        `Quantité de produit "${product.name}" non disponible en stock`,
+      );
+    }
+
+    this.product = product;
     this.quantity = itemCommand.quantity;
-    this.price = itemCommand.price;
+    this.price = product.price * this.quantity; // Le prix est basé sur le produit
   }
 }
