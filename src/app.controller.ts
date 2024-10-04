@@ -1,17 +1,13 @@
-import { Controller, Get } from '@nestjs/common';
-import { AppService } from './app.service';
+import { Body, Controller, Post, Param } from '@nestjs/common';
+import { AddItemToOrderService } from './add-item-to-order.service';
+import { ItemDetailCommand } from '../entity/order-item.entity';
 
-@Controller()
-export class AppController {
-  constructor(private readonly appService: AppService) {}
+@Controller('orders')
+export class OrderController {
+    constructor(private readonly addItemToOrderService: AddItemToOrderService) {}
 
-  @Get()
-  getHello(): string {
-    return this.appService.getHello();
-  }
-
-  // @Get('hello')
-  // getHelloAgain(): string {
-  //   return this.appService.getHelloAgain();
-  // }
+    @Post(':id/items')
+    async addItem(@Param('id') orderId: string, @Body() item: ItemDetailCommand) {
+        return this.addItemToOrderService.execute(orderId, item);
+    }
 }

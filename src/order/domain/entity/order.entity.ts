@@ -7,8 +7,9 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm';
 import { Expose } from 'class-transformer';
-
 import { BadRequestException } from '@nestjs/common';
+import { ProductRepositoryInterface } from 'src/product/domain/port/persistence/product.repository.interface';
+import { EmailServiceInterface } from 'src/notification/domain/service/email.service.interface';
 
 export interface CreateOrderCommand {
   items: ItemDetailCommand[];
@@ -29,11 +30,8 @@ export enum OrderStatus {
 @Entity()
 export class Order {
   static MAX_ITEMS = 5;
-
   static AMOUNT_MINIMUM = 5;
-
   static AMOUNT_MAXIMUM = 500;
-
   static SHIPPING_COST = 5;
 
   @CreateDateColumn()
@@ -85,15 +83,19 @@ export class Order {
   @Column({ nullable: true })
   @Expose({ groups: ['group_orders'] })
   private cancelReason: string | null;
-  
-  public constructor(createOrderCommand?: CreateOrderCommand, products?: Product[]) {
-    if (!createOrderCommand || !products) {
+
+  // Ajout de dépendances pour ProductRepository et EmailService
+  constructor(
+    createOrderCommand?: CreateOrderCommand,
+    private readonly productRepository?: ProductRepositoryInterface,
+    private readonly emailService?: EmailServiceInterface,
+  ) {
+    if (!createOrderCommand) {
       return;
     }
 
     this.verifyOrderCommandIsValid(createOrderCommand);
     this.verifyMaxItemIsValid(createOrderCommand);
-    this.verifyProductsAreValid(createOrderCommand.items, products); // Nouvelle validation des produits
 
     this.orderItems = createOrderCommand.items.map(
       (item) => new OrderItem(item),
@@ -104,33 +106,26 @@ export class Order {
     this.invoiceAddress = createOrderCommand.invoiceAddress;
     this.status = OrderStatus.PENDING;
     this.price = this.calculateOrderAmount(createOrderCommand.items);
-
-    this.updateProductStock(createOrderCommand.items, products); // Mise à jour des stocks des produits
   }
 
-  private verifyProductsAreValid(items: ItemDetailCommand[], products: Product[]) {
-    // Vérifier que tous les produits dans la commande sont actifs et disponibles
-    items.forEach((item) => {
-      const product = products.find((p) => p.id === item.productId);
-      if (!product || !product.isActive) {
-        throw new BadRequestException(`Le produit ${item.productId} n'est pas valide ou est inactif`);
-      }
-    });
+  private verifyMaxItemIsValid(createOrderCommand: CreateOrderCommand) {
+    if (createOrderCommand.items.length > Order.MAX_ITEMS) {
+      throw new BadRequestException(
+        'Cannot create order with more than 5 items',
+      );
+    }
   }
 
-  private updateProductStock(items: ItemDetailCommand[], products: Product[]) {
-    // Réduire le stock des produits commandés
-    items.forEach((item) => {
-      const product = products.find((p) => p.id === item.productId);
-      if (product) {
-        if (product.stock < item.quantity) {
-          throw new BadRequestException(
-            `Stock insuffisant pour le produit ${product.name}`,
-          );
-        }
-        product.stock -= item.quantity;
-      }
-    });
+  private verifyOrderCommandIsValid(createOrderCommand: CreateOrderCommand) {
+    if (
+      !createOrderCommand.customerName ||
+      !createOrderCommand.items ||
+      createOrderCommand.items.length === 0 ||
+      !createOrderCommand.shippingAddress ||
+      !createOrderCommand.invoiceAddress
+    ) {
+      throw new BadRequestException('Missing required fields');
+    }
   }
 
   private calculateOrderAmount(items: ItemDetailCommand[]): number {
@@ -199,7 +194,7 @@ export class Order {
     }
 
     this.status = OrderStatus.CANCELED;
-    this.cancelAt = new Date('NOW');
+    this.cancelAt = new Date();
     this.cancelReason = cancelReason;
   }
 
@@ -216,5 +211,40 @@ export class Order {
       .map((item) => item.productName)
       .join(', ');
     return `invoice number ${this.id}, with items: ${itemsNames}`;
+  }
+
+  public async addItemToOrder(item: ItemDetailCommand): Promise<void> {
+    if (this.status !== OrderStatus.PENDING) {
+      throw new Error('Cannot add items to an order that is not pending');
+    }
+
+    const product = await this.productRepository.findById(item.productId);
+    if (!product) {
+      throw new Error(`Produit avec l'ID ${item.productId} non trouvé`);
+    }
+
+    // Vérifiez si le stock est suffisant
+    if (product.stock < item.quantity) {
+      throw new Error(`Stock insuffisant pour le produit ${product.name}`);
+    }
+
+    // Ajoutez le nouvel article à la commande
+    const orderItem = new OrderItem(item);
+    this.orderItems.push(orderItem);
+    
+    // Décrémenter le stock du produit
+    product.stock -= item.quantity;
+
+    // Vérification si le stock atteint zéro
+    if (product.stock <= 0) {
+      // Envoyer un email à l'admin
+      await this.emailService.sendLowStockAlert(product);
+    }
+
+    // Sauvegarder les modifications
+    await this.productRepository.save(product);
+
+    // Recalculez le montant total de la commande
+    this.price = this.calculateOrderAmount(this.orderItems);
   }
 }

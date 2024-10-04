@@ -3,8 +3,10 @@ import { Product } from './product.entity'; // Importation de Product
 import { Column, Entity, ManyToOne, PrimaryGeneratedColumn } from 'typeorm';
 
 export interface ItemDetailCommand {
-  productId: string; // Utilisation de l'ID du produit
-  quantity: number;
+    productId: string; // Ajout de l'ID du produit
+    productName: string;
+    price: number;
+    quantity: number;
 }
 
 @Entity('order-item')
