@@ -10,12 +10,15 @@ import { Expose } from 'class-transformer';
 import { BadRequestException } from '@nestjs/common';
 import { ProductRepositoryInterface } from 'src/product/domain/port/persistence/product.repository.interface';
 import { EmailServiceInterface } from 'src/notification/domain/service/email.service.interface';
+import { Promotion } from 'src/promotion/domain/entity/promotion.entity'; // Importer l'entité Promotion
+import { PromotionRepositoryInterface } from 'src/promotion/domain/port/persistence/promotion.repository.interface'; // Importer le repository
 
 export interface CreateOrderCommand {
   items: ItemDetailCommand[];
   customerName: string;
   shippingAddress: string;
   invoiceAddress: string;
+  promotionCode?: string; // Ajouter le code promotionnel en option
 }
 
 export enum OrderStatus {
@@ -84,12 +87,15 @@ export class Order {
   @Expose({ groups: ['group_orders'] })
   private cancelReason: string | null;
 
-  // Ajout de dépendances pour ProductRepository et EmailService
-  constructor(
+  private promotion?: Promotion; // Ajouter une propriété pour la promotion
+  private readonly promotionRepository: PromotionRepositoryInterface; // Référencer le repository pour la promotion
+
+  public constructor(
     createOrderCommand?: CreateOrderCommand,
-    private readonly productRepository?: ProductRepositoryInterface,
-    private readonly emailService?: EmailServiceInterface,
+    promotionRepository?: PromotionRepositoryInterface, // Passer le repository dans le constructeur
   ) {
+    this.promotionRepository = promotionRepository; // Initialiser le repository
+
     if (!createOrderCommand) {
       return;
     }
@@ -106,6 +112,11 @@ export class Order {
     this.invoiceAddress = createOrderCommand.invoiceAddress;
     this.status = OrderStatus.PENDING;
     this.price = this.calculateOrderAmount(createOrderCommand.items);
+    
+    // Appliquer la promotion si elle est fournie
+    if (createOrderCommand.promotionCode) {
+      this.applyPromotion(createOrderCommand.promotionCode);
+    }
   }
 
   private verifyMaxItemIsValid(createOrderCommand: CreateOrderCommand) {
@@ -138,6 +149,21 @@ export class Order {
     }
 
     return totalAmount;
+  }
+
+  private applyPromotion(code: string): void {
+    const promotion = this.promotionRepository.findByCode(code); // Méthode fictive à ajouter au repository
+
+    if (!promotion) {
+      throw new BadRequestException('Code promo invalide');
+    }
+
+    this.promotion = promotion;
+    this.price -= promotion.amount; // Appliquer le montant de la promotion
+
+    if (this.price < 0) {
+      this.price = 0; // Le prix ne peut pas être négatif
+    }
   }
 
   pay(): void {
@@ -194,7 +220,7 @@ export class Order {
     }
 
     this.status = OrderStatus.CANCELED;
-    this.cancelAt = new Date();
+    this.cancelAt = new Date('NOW');
     this.cancelReason = cancelReason;
   }
 
@@ -211,40 +237,5 @@ export class Order {
       .map((item) => item.productName)
       .join(', ');
     return `invoice number ${this.id}, with items: ${itemsNames}`;
-  }
-
-  public async addItemToOrder(item: ItemDetailCommand): Promise<void> {
-    if (this.status !== OrderStatus.PENDING) {
-      throw new Error('Cannot add items to an order that is not pending');
-    }
-
-    const product = await this.productRepository.findById(item.productId);
-    if (!product) {
-      throw new Error(`Produit avec l'ID ${item.productId} non trouvé`);
-    }
-
-    // Vérifiez si le stock est suffisant
-    if (product.stock < item.quantity) {
-      throw new Error(`Stock insuffisant pour le produit ${product.name}`);
-    }
-
-    // Ajoutez le nouvel article à la commande
-    const orderItem = new OrderItem(item);
-    this.orderItems.push(orderItem);
-    
-    // Décrémenter le stock du produit
-    product.stock -= item.quantity;
-
-    // Vérification si le stock atteint zéro
-    if (product.stock <= 0) {
-      // Envoyer un email à l'admin
-      await this.emailService.sendLowStockAlert(product);
-    }
-
-    // Sauvegarder les modifications
-    await this.productRepository.save(product);
-
-    // Recalculez le montant total de la commande
-    this.price = this.calculateOrderAmount(this.orderItems);
   }
 }
